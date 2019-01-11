@@ -50,6 +50,15 @@ int main()
 
 	stCoRoutine_t* co[2];
 	int routineid[2];
+  //i=0时,创建第一个协程,co_resume切换协程执行,主协程接管main栈空间
+  //      第一个协程在poll中添加到1s超时队列中,(NULL,0)未传入任何要处理事件,co_swap切回主协程
+  //      co_swap返回到co_resume,再返回到main
+  //i=1时,创建第二个协程,co_resume切换第二个协程执行
+  //      第二个协程同第一个协程
+  //      返回到主协程
+  //i=2,for循环结束
+  //co_eventloop()轮询等待事件触发,直至超时触发i=0和i=1协程执行
+  //协程内部是while死循环,故一直等待->超时->等待->超时...
 	for (int i = 0; i < 2; i++)
 	{
 		routineid[i] = i;

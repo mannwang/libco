@@ -112,6 +112,7 @@ int coctx_make( coctx_t *ctx,coctx_pfn_t pfn,const void *s,const void *s1 )
 	return 0;
 }
 #elif defined(__x86_64__)
+//初始化时,为调用co_routine.cpp::CoRoutineFunc(stCoRoutine_t*,void*)准备
 int coctx_make( coctx_t *ctx,coctx_pfn_t pfn,const void *s,const void *s1 )
 {
 	char *sp = ctx->ss_sp + ctx->ss_size;
@@ -119,12 +120,13 @@ int coctx_make( coctx_t *ctx,coctx_pfn_t pfn,const void *s,const void *s1 )
 
 	memset(ctx->regs, 0, sizeof(ctx->regs));
 
-	ctx->regs[ kRSP ] = sp - 8;
+	ctx->regs[ kRSP ] = sp - 8; //regs[13]=sp-8
 
-	ctx->regs[ kRETAddr] = (char*)pfn;
+	ctx->regs[ kRETAddr] = (char*)pfn; //返回地址,pfn=CoRoutineFunc
 
-	ctx->regs[ kRDI ] = (char*)s;
-	ctx->regs[ kRSI ] = (char*)s1;
+  //输入参数
+	ctx->regs[ kRDI ] = (char*)s; //co
+	ctx->regs[ kRSI ] = (char*)s1; //0
 	return 0;
 }
 

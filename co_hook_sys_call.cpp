@@ -49,7 +49,7 @@ typedef long long ll64_t;
 
 struct rpchook_t
 {
-	int user_flag;
+	int user_flag; //fcntl时,如果co_is_enable_sys_hook,则置非阻塞标志
 	struct sockaddr_in dest; //maybe sockaddr_un;
 	int domain; //AF_LOCAL , AF_INET
 
@@ -230,7 +230,7 @@ int socket(int domain, int type, int protocol)
 	rpchook_t *lp = alloc_by_fd( fd );
 	lp->domain = domain;
 	
-	fcntl( fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL,0 ) );
+	fcntl( fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL,0 ) ); //根据协程阻塞/非阻塞状态设置user_flag
 
 	return fd;
 }
@@ -264,20 +264,23 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 	{
 		 memcpy( &(lp->dest),address,(int)address_len );
 	}
-	if( O_NONBLOCK & lp->user_flag ) 
+	if( O_NONBLOCK & lp->user_flag ) //非阻塞则直接返回,由调用者处理事件
 	{
 		return ret;
 	}
 	
 	if (!(ret < 0 && errno == EINPROGRESS))
 	{
-		return ret;
+		return ret; //出错了,返回
 	}
+  //阻塞状态,则协程库内部实现事件处理,对调用者透明
 
 	//2.wait
 	int pollret = 0;
 	struct pollfd pf = { 0 };
 
+  //系统connect操作75秒超时,hook后仍然保持75秒超时等待
+  //实现上变为25秒检查一次事件,最多3次
 	for(int i=0;i<3;i++) //25s * 3 = 75s
 	{
 		memset( &pf,0,sizeof(pf) );
@@ -286,21 +289,21 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 
 		pollret = poll( &pf,1,25000 );
 
-		if( 1 == pollret  )
+		if( 1 == pollret  ) //事件触发,则退出
 		{
 			break;
 		}
 	}
 	if( pf.revents & POLLOUT ) //connect succ
 	{
-		errno = 0;
+		errno = 0; //POLLOUT事件触发表示连接成功
 		return 0;
 	}
 
 	//3.set errno
 	int err = 0;
 	socklen_t errlen = sizeof(err);
-	getsockopt( fd,SOL_SOCKET,SO_ERROR,&err,&errlen);
+	getsockopt( fd,SOL_SOCKET,SO_ERROR,&err,&errlen); //连接失败则获取错误码
 	if( err ) 
 	{
 		errno = err;
@@ -337,11 +340,12 @@ ssize_t read( int fd, void *buf, size_t nbyte )
 	}
 	rpchook_t *lp = get_by_fd( fd );
 
-	if( !lp || ( O_NONBLOCK & lp->user_flag ) ) 
+	if( !lp || ( O_NONBLOCK & lp->user_flag ) ) //非阻塞读,enable_hook,由调用者处理事件监听
 	{
 		ssize_t ret = g_sys_read_func( fd,buf,nbyte );
 		return ret;
 	}
+  //阻塞读,disable_hook,协程库内部实现事件处理,对调用者透明
 	int timeout = ( lp->read_timeout.tv_sec * 1000 ) 
 				+ ( lp->read_timeout.tv_usec / 1000 );
 
@@ -349,7 +353,7 @@ ssize_t read( int fd, void *buf, size_t nbyte )
 	pf.fd = fd;
 	pf.events = ( POLLIN | POLLERR | POLLHUP );
 
-	int pollret = poll( &pf,1,timeout );
+	int pollret = poll( &pf,1,timeout ); //切换协程
 
 	ssize_t readret = g_sys_read_func( fd,(char*)buf ,nbyte );
 
@@ -366,17 +370,19 @@ ssize_t write( int fd, const void *buf, size_t nbyte )
 {
 	HOOK_SYS_FUNC( write );
 	
+  //协程环境enable_hook,且调用socket创建套接字,则肯定是非阻塞
 	if( !co_is_enable_sys_hook() )
 	{
 		return g_sys_write_func( fd,buf,nbyte );
 	}
 	rpchook_t *lp = get_by_fd( fd );
 
-	if( !lp || ( O_NONBLOCK & lp->user_flag ) )
+	if( !lp || ( O_NONBLOCK & lp->user_flag ) ) //enable_hook,由调用者完成事件监听处理
 	{
 		ssize_t ret = g_sys_write_func( fd,buf,nbyte );
 		return ret;
 	}
+  //disable_hook,协程库内部实现事件处理,对调用者透明
 	size_t wrotelen = 0;
 	int timeout = ( lp->write_timeout.tv_sec * 1000 ) 
 				+ ( lp->write_timeout.tv_usec / 1000 );
@@ -398,17 +404,19 @@ ssize_t write( int fd, const void *buf, size_t nbyte )
 		struct pollfd pf = { 0 };
 		pf.fd = fd;
 		pf.events = ( POLLOUT | POLLERR | POLLHUP );
+    //写部分数据后,添加事件到epoll,并切换到主协程
 		poll( &pf,1,timeout );
+    //下轮事件触发时,继续g_sys_write_func执行写数据
 
 		writeret = g_sys_write_func( fd,(const char*)buf + wrotelen,nbyte - wrotelen );
 		
-		if( writeret <= 0 )
+		if( writeret <= 0 ) //写数据出错退出
 		{
 			break;
 		}
-		wrotelen += writeret ;
+		wrotelen += writeret ;//计算数据
 	}
-	if (writeret <= 0 && wrotelen == 0)
+	if (writeret <= 0 && wrotelen == 0) //写数据失败提前返回
 	{
 		return writeret;
 	}
@@ -573,12 +581,12 @@ ssize_t recv( int socket, void *buffer, size_t length, int flags )
 
 extern int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout, poll_pfn_t pollfunc);
 
-int poll(struct pollfd fds[], nfds_t nfds, int timeout)
+int poll(struct pollfd fds[], nfds_t nfds, int timeout) //epoll注册事件,要么事件激活,要么超时激活
 {
 
 	HOOK_SYS_FUNC( poll );
 
-	if( !co_is_enable_sys_hook() )
+	if( !co_is_enable_sys_hook() ) //main函数调用poll时,可能未初始化协程环境,不存在协程,这里判断失效,直接调用系统poll函数
 	{
 		return g_sys_poll_func( fds,nfds,timeout );
 	}
@@ -747,10 +755,10 @@ void co_set_env_list( const char *name[],size_t cnt)
 			g_co_sysenv.data[ g_co_sysenv.cnt++ ].name = strdup( name[i] );
 		}
 	}
-	if( g_co_sysenv.cnt > 1 )
+	if( g_co_sysenv.cnt > 1 ) //排序,去重
 	{
 		qsort( g_co_sysenv.data,g_co_sysenv.cnt,sizeof(stCoSysEnv_t),co_sysenv_comp );
-		stCoSysEnv_t *lp = g_co_sysenv.data;
+		stCoSysEnv_t *lp = g_co_sysenv.data; //key-val
 		stCoSysEnv_t *lq = g_co_sysenv.data + 1;
 		for(size_t i=1;i<g_co_sysenv.cnt;i++)
 		{

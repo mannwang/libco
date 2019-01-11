@@ -115,16 +115,16 @@ static void *readwrite_routine( void *arg )
 			fd = socket(PF_INET, SOCK_STREAM, 0);
 			struct sockaddr_in addr;
 			SetAddr(endpoint->ip, endpoint->port, addr);
-			ret = connect(fd,(struct sockaddr*)&addr,sizeof(addr));
+			ret = connect(fd,(struct sockaddr*)&addr,sizeof(addr)); //enable_hook,调用者处理事件,co_poll(co_poll_inner)实现事件监听和协程切换
 						
 			if ( errno == EALREADY || errno == EINPROGRESS )
 			{       
 				struct pollfd pf = { 0 };
 				pf.fd = fd;
 				pf.events = (POLLOUT|POLLERR|POLLHUP);
-				co_poll( co_get_epoll_ct(),&pf,1,200);
+				co_poll( co_get_epoll_ct(),&pf,1,200); //fd添加到epoll事件,并切换到主协程中
 				//check connect
-				int error = 0;
+				int error = 0; //事件触发后,切回协程,检查事件
 				uint32_t socklen = sizeof(error);
 				errno = 0;
 				ret = getsockopt(fd, SOL_SOCKET, SO_ERROR,(void *)&error,  &socklen);
@@ -134,9 +134,9 @@ static void *readwrite_routine( void *arg )
 					close(fd);
 					fd = -1;
 					AddFailCnt();
-					continue;
+					continue; //重新执行connect操作
 				}       
-				if ( error ) 
+				if ( error ) //连接出错了
 				{       
 					errno = error;
 					//printf("connect ERROR ret %d %d:%s\n", error, errno, strerror(errno));
@@ -149,10 +149,10 @@ static void *readwrite_routine( void *arg )
 	  			
 		}
 		
-		ret = write( fd,str, 8);
+		ret = write( fd,str, 8); //连接成功,写字符串,出错或者连续写完数据返回
 		if ( ret > 0 )
 		{
-			ret = read( fd,buf, sizeof(buf) );
+			ret = read( fd,buf, sizeof(buf) ); //
 			if ( ret <= 0 )
 			{
 				//printf("co %p read ret %d errno %d (%s)\n",
