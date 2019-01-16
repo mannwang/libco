@@ -89,6 +89,7 @@ coctx_swap:
 	pushq %r15             //regs[0]=r15
 	//------至此保存完成
 	
+	//stCoRoutine_t->ctx前面是寄存器,后面是栈空间,始终先保存/恢复寄存器,rsp再指向栈位置
 	movq %rsi, %rsp        //rsi=pending_co->ctx
 	//------通过把rsp指向ctx::regs[0],再利用popq指令,把挂起协程数据恢复到寄存器ctx::regs[14]
 	popq %r15              //regs[0]->%r15
@@ -104,9 +105,14 @@ coctx_swap:
 	popq %rdx              //regs[10]->%rdx
 	popq %rcx              //regs[11]->%rcx
 	popq %rbx              //regs[12]->%rbx
-	popq %rsp              //regs[13]->%rsp,rsp指向pending_co,后面再pushq后,rsp指向返回地址,ret返回
+	popq %rsp              //regs[13]->%rsp,rsp指向pending_co->ctx->ss_sp后面,之后再pushq后,rsp指向返回地址,ret返回
+	                       //coctx_make后rsp为ctx->ss_sp(16字节对齐)
+												 //协程切换时,rsp为栈空间实际位置(coctx_swap函数栈空间)
 	pushq %rax             //把真实返回地址push到栈中,rsp指向返回地址下一个地址
 	
 	xorl %eax, %eax
-	ret
+	ret                    //到返回地址处执行,协程暂停位置(coctx_swap返回,rsi&rdi为调用前的输入)或CoRoutineFunc函数起始地址(rsi&rdi为调用CoRoutineFunc函数的输入参数)
+	                       //巧妙利用ret实现正常函数调用返回与函数进入执行
+												 //设计上,待返回的函数和即将进入执行的函数输入参数相同
+												 //libco中CoRoutineFunc函数实际上只需要一个参数(co),为实现上述设计,添加了一个空参数
 #endif

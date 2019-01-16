@@ -52,11 +52,11 @@ struct stCoRoutineEnv_t
 {
 	stCoRoutine_t *pCallStack[ 128 ];
 	int iCallStackSize;
-	stCoEpoll_t *pEpoll;
+	stCoEpoll_t *pEpoll; //协程环境关联的epoll对象
 
 	//for copy stack log lastco and nextco
-	stCoRoutine_t* pending_co;
-	stCoRoutine_t* occupy_co;
+	stCoRoutine_t* pending_co; //nextco
+	stCoRoutine_t* occupy_co; //lastco
 };
 //int socket(int domain, int type, int protocol);
 void co_log_err( const char *fmt,... )
@@ -311,21 +311,27 @@ struct stTimeoutItemLink_t;
 struct stTimeoutItem_t;
 struct stCoEpoll_t
 {
-	int iEpollFd;
+	int iEpollFd; //epoll描述符
 	static const int _EPOLL_SIZE = 1024 * 10;
 
-	struct stTimeout_t *pTimeout;
+  //libco定义双向链表,入口称为Link(配置head和tail),链表每个元素有一个成员变量指向Link
+	struct stTimeout_t *pTimeout; //pTimeout->pItems[60*1000],超时双向链表入口数组,默认6万个双向链表入口
+                                //pTimeout->ullStart = 当前时间毫秒
+                                //pTimeout->llStartIdx = 0
 
-	struct stTimeoutItemLink_t *pstTimeoutList;
+	struct stTimeoutItemLink_t *pstTimeoutList; //超时对象链表入口Link对象
 
-	struct stTimeoutItemLink_t *pstActiveList;
+	struct stTimeoutItemLink_t *pstActiveList; //事件激活对象链表入口Link
+  //每轮事件处理时
+  //先把事件激活对象从pTimeout[]的每个链表取出,放入激活对象链表
+  //再把pTimeout[]中超时队列整体合并到激活对象链表(会设置超时标记)
 
-	co_epoll_res *result; 
+	co_epoll_res *result;  //epoll事件数组,用于epoll_wait取出激活事件
 
 };
 typedef void (*OnPreparePfn_t)( stTimeoutItem_t *,struct epoll_event &ev, stTimeoutItemLink_t *active );
 typedef void (*OnProcessPfn_t)( stTimeoutItem_t *);
-struct stTimeoutItem_t
+struct stTimeoutItem_t //双向链表元素结构基础元素
 {
 
 	enum
@@ -334,17 +340,18 @@ struct stTimeoutItem_t
 	};
 	stTimeoutItem_t *pPrev;
 	stTimeoutItem_t *pNext;
-	stTimeoutItemLink_t *pLink;
+	stTimeoutItemLink_t *pLink; //指向链表入口Link结构
 
+  //元素超时时间(epoll事件对象),与当前时间差值决定插入stCoEpoll_t::pTimeout[]哪个队列
 	unsigned long long ullExpireTime;
 
 	OnPreparePfn_t pfnPrepare;
 	OnProcessPfn_t pfnProcess;
 
-	void *pArg; // routine 
-	bool bTimeout;
+	void *pArg; // routine ,协程对象
+	bool bTimeout; //是否超时
 };
-struct stTimeoutItemLink_t
+struct stTimeoutItemLink_t //双向链表入口Link结构
 {
 	stTimeoutItem_t *head;
 	stTimeoutItem_t *tail;
@@ -352,11 +359,11 @@ struct stTimeoutItemLink_t
 };
 struct stTimeout_t
 {
-	stTimeoutItemLink_t *pItems;
-	int iItemSize;
+	stTimeoutItemLink_t *pItems; //超时双向链表对象,[60*1000]个链表
+	int iItemSize;//pItems长度
 
-	unsigned long long ullStart;
-	long long llStartIdx;
+	unsigned long long ullStart; //开始时间
+	long long llStartIdx; //[ullStartIdx,ullCurr-ullStart]链表均超时,虚拟双向队列
 };
 stTimeout_t *AllocTimeout( int iSize )
 {
@@ -370,11 +377,12 @@ stTimeout_t *AllocTimeout( int iSize )
 
 	return lp;
 }
-void FreeTimeout( stTimeout_t *apTimeout )
+void FreeTimeout( stTimeout_t *apTimeout ) //释放超时队列
 {
 	free( apTimeout->pItems );
 	free ( apTimeout );
 }
+//往apTimeout->pItems[60*1000]队列allNow位置插入对象apItem
 int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long long allNow )
 {
 	if( apTimeout->ullStart == 0 )
@@ -398,7 +406,7 @@ int AddTimeout( stTimeout_t *apTimeout,stTimeoutItem_t *apItem ,unsigned long lo
 	}
 	unsigned long long diff = apItem->ullExpireTime - apTimeout->ullStart;
 
-	if( diff >= (unsigned long long)apTimeout->iItemSize )
+	if( diff >= (unsigned long long)apTimeout->iItemSize ) //太长时间没有执行,才会出现
 	{
 		diff = apTimeout->iItemSize - 1;
 		co_log_err("CO_ERR: AddTimeout line %d diff %d",
@@ -441,17 +449,28 @@ inline void TakeAllTimeout( stTimeout_t *apTimeout,unsigned long long allNow,stT
 
 
 }
+//coctx_init初始化coctx_t ctx为空
+//coctx_make时
+//用该函数初始化coctx_t对象(64位):rsp,retaddr,rdi(co),rsi(0),注:rbp=0,rsp=stack_buffer-8
+//栈空间+执行地址入口(retaddr)
+//32位设计略有差异
+//协程切入执行,交换寄存器环境后,切入到CoRoutineFunc函数执行
 static int CoRoutineFunc( stCoRoutine_t *co,void * )
 {
 	if( co->pfn )
 	{
+    //协程首次切入时,调用协程函数体执行,co->arg为输入参数
+    //如example_poll.cpp示例中poll_routine(v2)
 		co->pfn( co->arg );
+    //有两种可能情况:假设pfn调用一次poll
+    //1.协程隐式切换,pfn中调用poll等函数实现协程切换了,后续应当进入状态2
+    //2.协程执行完成,pfn中poll事件触发返回了
 	}
-	co->cEnd = 1;
+	co->cEnd = 1; //状态1切换到状态2后,即协程执行完成,置cEnd标记
 
 	stCoRoutineEnv_t *env = co->env;
 
-	co_yield_env( env );
+	co_yield_env( env ); //切换回主协程
 
 	return 0;
 }
@@ -797,7 +816,7 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg ) //pfn(arg
 
 
 		unsigned long long now = GetTickMS();
-		TakeAllTimeout( ctx->pTimeout,now,timeout ); //超时对象添加到timeout队列
+		TakeAllTimeout( ctx->pTimeout,now,timeout ); //超时对象添加到timeout队列,并更新基准时间为now
 
 		stTimeoutItem_t *lp = timeout->head;
 		while( lp )

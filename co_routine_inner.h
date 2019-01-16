@@ -53,24 +53,26 @@ struct stCoRoutine_t
 	void *arg;
 	coctx_t ctx;
 
-	char cStart;
-	char cEnd;
-	char cIsMain;
-	char cEnableSysHook;
-	char cIsShareStack;
+	char cStart; //协程开始执行标记
+	char cEnd;   //协程执行完成标记
+	char cIsMain;//是否主协程
+	char cEnableSysHook; //是否EnableHook
+	char cIsShareStack;  //是否在使用共享栈,共享栈需要备份栈空间
 
-	void *pvEnv;
+	void *pvEnv; //协程环境变量结构
 
 	//char sRunStack[ 1024 * 128 ];
-	stStackMem_t* stack_mem;
+	stStackMem_t* stack_mem; //协程栈空间结构,最底层是co_alloc_stackmem分配
+                           //协程rbp位置为stack_mem->stack_buffer+stack_size
+                           //即rbp为stack_buffer[stack_size](栈基址为高地址)
 
 
 	//save satck buffer while confilct on same stack_buffer;
-	char* stack_sp; 
+	char* stack_sp;  //协程栈rsp位置,co_swap函数中切换协程前,获取栈sp地址
 	unsigned int save_size;
-	char* save_buffer;
+	char* save_buffer; //共享栈时,申请空间bp-sp存放栈
 
-	stCoSpec_t aSpec[1024];
+	stCoSpec_t aSpec[1024]; //协程特定数据,参照线程特定数据
 
 };
 
