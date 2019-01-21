@@ -37,6 +37,9 @@ void* RoutineFunc(void* args)
 
 		printf("%s", sBuff);
 		poll(NULL, 0, 1000); //sleep 1s
+		sprintf(sBuff, "end routineid %d stack addr %p\n", *routineid, sBuff);
+		printf("%s", sBuff);
+    break;
 	}
 	return NULL;
 }

@@ -206,7 +206,12 @@ int main(int argc,char *argv[])
 		for(int i=0;i<cnt;i++)
 		{
 			stCoRoutine_t *co = 0;
+      //1.检查当前线程是否已初始化协程环境,若未则初始化,包括创建主协程
+      //2.创建协程
 			co_create( &co,NULL,readwrite_routine, &endpoint);
+      //1.取出调用栈顶协程(主协程)
+      //2.待切协程未开始,则制作协程,入口为CoRoutineFunc(co,0)
+      //3.切换协程,co_swap->coctx_swap->协程体->隐式co_swap
 			co_resume( co );
 		}
 		co_eventloop( co_get_epoll_ct(),0,0 );

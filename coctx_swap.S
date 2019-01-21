@@ -78,9 +78,9 @@ coctx_swap:
 
 	pushq -8(%rax) //ret func addr,regs[9]=返回地址,暂存,后面再pushq该值
 
-	pushq %rsi             //regs[8]=rsi
+	pushq %rsi             //regs[8]=rsi,rsi=pending_co->ctx
 	pushq %rdi             //regs[7]=rdi,rdi=curr->ctx
-	pushq %rbp             //regs[6]=rbp,co_swap栈基址
+	pushq %rbp             //regs[6]=rbp,co_swap栈基址,coctx_swap不更新rbp,与co_swap共用栈空间
 	pushq %r8              //regs[5]=r8
 	pushq %r9              //regs[4]=r9
 	pushq %r12             //regs[3]=r12

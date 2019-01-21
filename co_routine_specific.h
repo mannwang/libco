@@ -84,3 +84,5 @@ public:\
 \
 static clsRoutineData_routine_##name<name> y;
 
+//重载operator->,实现类对象y接管类对象name
+

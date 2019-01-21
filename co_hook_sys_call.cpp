@@ -230,7 +230,15 @@ int socket(int domain, int type, int protocol)
 	rpchook_t *lp = alloc_by_fd( fd );
 	lp->domain = domain;
 	
-	fcntl( fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL,0 ) ); //根据协程阻塞/非阻塞状态设置user_flag
+  //根据协程hook/非hook状态设置user_flag
+  //user_flag & O_NONBLOCK时,非阻塞fd
+  //  hook时,libco非阻塞,user_flag非阻塞
+  //  non-hook时,libco非阻塞(与user_flag相同),user_flag非阻塞
+  //!(user_flag & O_NONBLOCK),阻塞fd
+  //  hook时,libco非阻塞,user_flag阻塞
+  //  non-hook时,libco阻塞(与user_flag相同),user_flag阻塞
+  //后面会使用user_flag,分清
+	fcntl( fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL,0 ) );
 
 	return fd;
 }
@@ -255,7 +263,7 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 	}
 
 	//1.sys call
-	int ret = g_sys_connect_func( fd,address,address_len );
+	int ret = g_sys_connect_func( fd,address,address_len ); //hook时libco内部非阻塞
 
 	rpchook_t *lp = get_by_fd( fd );
 	if( !lp ) return ret;
@@ -264,7 +272,8 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 	{
 		 memcpy( &(lp->dest),address,(int)address_len );
 	}
-	if( O_NONBLOCK & lp->user_flag ) //非阻塞则直接返回,由调用者处理事件
+  //user_flag是调用者传入的套接字原始flag,fd非阻塞则直接返回,由调用者处理非阻塞事件
+	if( O_NONBLOCK & lp->user_flag )
 	{
 		return ret;
 	}
@@ -287,7 +296,7 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 		pf.fd = fd;
 		pf.events = ( POLLOUT | POLLERR | POLLHUP );
 
-		pollret = poll( &pf,1,25000 );
+		pollret = poll( &pf,1,25000 ); //每次最多等待25秒,连接成功则触发事件
 
 		if( 1 == pollret  ) //事件触发,则退出
 		{
@@ -787,6 +796,7 @@ int setenv(const char *n, const char *value, int overwrite)
 		{
 			if( !self->pvEnv )
 			{
+        //复制全局环境变量给协程
 				self->pvEnv = dup_co_sysenv_arr( &g_co_sysenv );
 			}
 			stCoSysEnvArr_t *arr = (stCoSysEnvArr_t*)(self->pvEnv);
@@ -890,6 +900,9 @@ struct res_state_wrap
 {
 	struct __res_state state;
 };
+//定义新类,并接管res_state_wrap
+//定义__co_state_wrap变量
+//__co_state_wrap->state将返回res_state_wrap成员
 CO_ROUTINE_SPECIFIC(res_state_wrap, __co_state_wrap);
 
 extern "C"

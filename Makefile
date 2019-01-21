@@ -38,7 +38,7 @@ endif
 COLIB_OBJS=co_epoll.o co_routine.o co_hook_sys_call.o coctx_swap.o coctx.o
 #co_swapcontext.o
 
-PROGS = colib example_poll example_echosvr example_echocli example_thread  example_cond example_specific example_copystack example_closure
+PROGS = colib example_poll example_echosvr example_echocli example_thread  example_cond example_specific example_copystack example_closure example_co
 
 all:$(PROGS)
 
@@ -68,6 +68,8 @@ example_copystack:example_copystack.o
 example_setenv:example_setenv.o
 	$(BUILDEXE)
 example_closure:example_closure.o
+	$(BUILDEXE)
+example_co:example_co.o
 	$(BUILDEXE)
 
 dist: clean libco-$(version).src.tar.gz
