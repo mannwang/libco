@@ -54,22 +54,30 @@ coctx_swap:
 	ret
 
 #elif defined(__x86_64__)
-	//pushq %rbp; movq %rsp,%rbp ---rsp指向rbp入栈位置,即rsp指向有效值
+	//正常函数调用:pushq %rbp; movq %rsp,%rbp ---rsp指向rbp入栈位置,即rsp指向有效值
 	//co_swap调用本函数coctx_swap
 	//co_swap栈空间64B(EBP,ESP=EBP-64),<curr,pending_co>填充在EBP-56和EBP-64位置
 	//call coctx_swap: pushl 返回地址(call指令下一条指令);movl coctx_swap %eip
   //栈空间:curr,pending_co,返回地址
-	//%rsp指向返回地址
-	//%rsp+8指向pending_co
-	//%rsp+16指向curr
+	//---------------------------------
+	//高地址   |	...			| ...       |
+	//---------------------------------
+	//RBP-56   | rsp+16   | curr      |
+	//---------------------------------
+	//RBP-64	 | rsp+8		| pending_co|
+	//---------------------------------
+	//...		   | rsp			| 返回地址  |
+	//---------------------------------
+	//低地址   | ...      | ...       |
+	//---------------------------------
 	//%rdi=curr->ctx,%rsi=pending_co->ctx
 	//注:lea->传送寄存器的值,lea 8(%eax),%ecx;ecx=eax+8
 	//   mov->传送寄存器的值指向的地址的值,mov 8(%eax),%ecx;ecx=[eax+8]
 	//   r10,r11是调用者保存寄存器,只用保存其它14个寄存器
-	leaq 8(%rsp),%rax      //rax=pending_co
+	leaq 8(%rsp),%rax      //--xxx--rax=pending_co--xxx--,rax=rsp+8
 	leaq 112(%rdi),%rsp    //rsp=&(curr->ctx::regs[14])
 	//------通过把rsp指向ctx::regs[14],再利用pushq指令,把寄存器保存到ctx::regs[14]
-	pushq %rax             //regs[13]=rax,rax为pending_co(%rsp),rax-8为返回地址
+	pushq %rax             //regs[13]=rax,rax为pending_co地址,rax-8为返回地址
 	                       //以后用该值恢复为%esp,再pushq待切换协程的返回地址
 												 //再通过ret恢复到待切换协程
 	pushq %rbx             //regs[12]=rbx
@@ -105,8 +113,8 @@ coctx_swap:
 	popq %rdx              //regs[10]->%rdx
 	popq %rcx              //regs[11]->%rcx
 	popq %rbx              //regs[12]->%rbx
-	popq %rsp              //regs[13]->%rsp,rsp指向pending_co->ctx->ss_sp后面,之后再pushq后,rsp指向返回地址,ret返回
-	                       //coctx_make后rsp为ctx->ss_sp(16字节对齐)
+	popq %rsp              //regs[13]->%rsp,rsp指向pending_co,之后再pushq后,rsp指向返回地址,ret返回
+	                       //coctx_make后rsp为ctx->ss_sp+ss_size(16字节对齐)
 												 //协程切换时,rsp为栈空间实际位置(coctx_swap函数栈空间)
 	pushq %rax             //把真实返回地址push到栈中,rsp指向返回地址下一个地址
 	
